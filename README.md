@@ -7,13 +7,13 @@ The script can be run in interactive mode to suggest switchover or failover and
 will create a slonik script to perform the suggested action.
 
 It's hard to put together a script for all situations as different Slony 
-configurations can have different complexities (hence the existance of slonik), 
+configurations can have different complexities (hence the existence of slonik), 
 but this script is intended to be used for building and running slonik scripts 
 to move all sets from one node to another.
 
 There is also an autofailover mode which will sit and poll each node and perform
 a failover of failed nodes.  This mode should be assumed as experimental, as 
-there can be guite a few decisions to be made when failing over different setups.
+there can be quite a few decisions to be made when failing over different setups.
 
 ##Example usage
 
