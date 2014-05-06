@@ -48,7 +48,7 @@ $ sudo invoke-rc.d slony_failover start
 $ ./failover.pl [options]
 ```
 
-|Switch    |
+|Switch    | Description
 |----------|------------------------------------------
 |-f        |Read all configuration from config file
 |-h        |Host running PostgreSQL instance to read state of Slony-I cluster from
