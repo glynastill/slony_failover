@@ -1,0 +1,5 @@
+# Database node to read Slony-I configuration from
+slony_database_host = localhost
+slony_database_name = TEST
+slony_cluster_name = test_replication
+
