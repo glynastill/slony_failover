@@ -66,13 +66,13 @@ $ ./failover.pl [options]
 | General     |**lang**                                      | en/fr                         | *'en'*                          | The language to print messages in, currently only english and french
 | General     |**prefix_directory**                          | /full/path/to/directory       | *'/tmp/slony_failovers'*        | Working directory for script to generate slonik scripts and log files
 | General     |**separate_working_directory**                | boolean                       | *'true'*                        | Append a separate working directory to the prefix_directory for each run
-| General     |**slonik_path**                               | /full/path/to/bin/directory   | *<null>*                        | Slonik binary if not in current path
+| General     |**slonik_path**                               | /full/path/to/bin/directory   | *null*                          | Slonik binary if not in current path
 | General     |**pid_filename**                              | /path/to/pidfile              | *'/var/run/slony_failover.pid'* | Pid file to use when running in autofailover mode
 | General     |**enable_try_blocks**                         | boolean                       | *false*                         |    Write slonik script with try blocks where possible to aid error handling
 | General     |**lockset_method**                            | single/multiple               | *'multiple'*                    | Write slonik script that locks all sets
 | General     |**pull_aliases_from_comments**                | boolean                       | *false*                         | If true, script will pull text from between parentheses in comments fields
-|             |                                              |                               |                                     | and use to generate (possibly) meaningful aliases for nodes and sets.
-| General     |**log_line_prefix**                           | text                          | *<null>*                        | Prefix to add to log lines, special values:
+|             |                                              |                               |                                 | and use to generate (possibly) meaningful aliases for nodes and sets.
+| General     |**log_line_prefix**                           | text                          | *null*                          | Prefix to add to log lines, special values:
 |             |                                              |                               |                                 |     %p = process ID
 |             |                                              |                               |                                 |     %t = timestamp without milliseconds
 |             |                                              |                               |                                 |     %m = timestamp with milliseconds
@@ -81,19 +81,19 @@ $ ./failover.pl [options]
 |             |                                              |                               |                                 | excluded from the preamble and not failed over, however this may be problematic
 |             |                                              |                               |                                 | especially in the case where the most up to date node is the unavailable one.
 | General     |**drop_failed_nodes**                         | boolean                       | *false*                         | After failover automatically drop the failed nodes.
-| Slon Config |**slony_database_host**                       | IP Address/Hostname           | *<null>*                        | PostgreSQL Hostname of database to read Slony configuration from
+| Slon Config |**slony_database_host**                       | IP Address/Hostname           | *null*                          | PostgreSQL Hostname of database to read Slony configuration from
 | Slon Config |**slony_database_port**                       | integer                       | *5432*                          | PostgreSQL Port of database to read Slony configuration from
-| Slon Config |**slony_database_name**                       | name                          | *<null>*                        | PostgreSQL database name to read Slony configuration from 
+| Slon Config |**slony_database_name**                       | name                          | *null*                          | PostgreSQL database name to read Slony configuration from 
 | Slon Config |**slony_database_user**                       | username                      | *'slony'*                       | Username to use to connect when reading Slony configuration
 | Slon Config |**slony_database_password**                   | password                      | *''*                            | Recommended to leave blank and use .pgpass file
-| Slon Config |**slony_cluster_name**                        | name                          | *<null>*                        | Name of Slony-I cluster to read configuration for 
+| Slon Config |**slony_cluster_name**                        | name                          | *null*                          | Name of Slony-I cluster to read configuration for 
 | Logging     |**enable_debugging**                          | boolean                       | *false*                         | Enable printing of debug messages to stdout
 | Logging     |**log_filename**                              | base file name                | *'failover.log'*                | File name to use for script process logging, special values as per strftime spec
 | Logging     |**log_to_postgresql**                         | boolean                       | *false*                         | Store details of failover script runs in a postgresql database
-| Logging     |**log_database_host**                         | IP Address/Hostname           | *<null>*                        | PostgreSQL Hostname of logging database
-| Logging     |**log_database_port**                         | integer                       | *<null>*                        | PostgreSQL Port of logging database
-| Logging     |**log_database_name**                         | name                          | *<null>*                        | PostgreSQL database name of logging database
-| Logging     |**log_database_user**                         | username                      | *<null>*                        | Username to use to connect when logging to database
+| Logging     |**log_database_host**                         | IP Address/Hostname           | *null*                          | PostgreSQL Hostname of logging database
+| Logging     |**log_database_port**                         | integer                       | *null*                          | PostgreSQL Port of logging database
+| Logging     |**log_database_name**                         | name                          | *null*                          | PostgreSQL database name of logging database
+| Logging     |**log_database_user**                         | username                      | *null*                          | Username to use to connect when logging to database
 | Logging     |**log_database_password**                     | password                      | *''*                            | Recommended to leave blank and use .pgpass file
 | Autofailover|**enable_autofailover**                       | boolean                       | *'false'*                       | Rather than interactive mode sit and watch the cluster state for failed
 |             |                                              |                               |                                 | origin/forwarding nodes; upon detection trigger automated failover.
@@ -103,7 +103,7 @@ $ ./failover.pl [options]
 |             |                                              |                               |                                 | will use conninfo read from sl_subscribe to read from any node.
 | Autofailover|**autofailover_poll_interval**                | integer                       | 500                             | How often to check for failure of nodes (milliseconds)
 | Autofailover|**autofailover_node_retry**                   | integer                       | 2                               | When failure is detected, retry this many times before initiating failover
-| Autofailover|**autofailover_sleep_time*                    | integer                       | 1000                            | Interval between retries (milliseconds)
+| Autofailover|**autofailover_sleep_time**                   | integer                       | 1000                            | Interval between retries (milliseconds)
 
 Changes
 -------
