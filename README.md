@@ -70,8 +70,9 @@ $ ./failover.pl [options]
 | General     |**pid_filename**                              | /path/to/pidfile              | *'/var/run/slony_failover.pid'* | Pid file to use when running in autofailover mode
 | General     |**enable_try_blocks**                         | boolean                       | *false*                         |    Write slonik script with try blocks where possible to aid error handling
 | General     |**lockset_method**                            | single/multiple               | *'multiple'*                    | Write slonik script that locks all sets
-| General     |**pull_aliases_from_comments**                | boolean                       | *false*                         | If true, script will pull text from between parentheses in comments fields
-|             |                                              |                               |                                 | and use to generate (possibly) meaningful aliases for nodes and sets.
+| General     |**pull_aliases_from_comments**                | boolean                       | *false*                         | If true, script will pull text from comment fields and use to generate
+|             |                                              |                               |                                 | possibly meaningful aliases for nodes and sets.
+|             |                                              |                               |                                 | For sl_set this uses the entire comment, and sl_node text in parentheses.
 | General     |**log_line_prefix**                           | text                          | *null*                          | Prefix to add to log lines, special values:
 |             |                                              |                               |                                 |     %p = process ID
 |             |                                              |                               |                                 |     %t = timestamp without milliseconds

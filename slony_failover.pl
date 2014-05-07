@@ -714,10 +714,10 @@ sub loadCluster {
                     COALESCE(c.pa_conninfo,(SELECT pa_conninfo FROM $qw_clname.sl_path WHERE pa_server = $qw_clname.getlocalnodeid(?) LIMIT 1)) AS no_conninfo,
                     array_to_string(array(SELECT set_id FROM $qw_clname.sl_set WHERE set_origin = a.no_id ORDER BY set_id),',') AS origin_sets,
                     string_agg(CASE WHEN b.sub_receiver = a.no_id AND b.sub_forward AND b.sub_active THEN b.sub_set::text END, ',' ORDER BY b.sub_set) AS prov_sets,
-                    coalesce(trim(replace(substring(a.no_comment from E'\\\\((.+)\\\\)'), ' ','')), 'node' || a.no_id) AS no_name,
+                    coalesce(trim(regexp_replace(substring(a.no_comment from E'\\\\((.+)\\\\)'), '[^0-9A-Za-z]','_','g')), 'node' || a.no_id) AS no_name,
                     'n' || b.sub_provider || '->(' || string_agg(CASE WHEN b.sub_receiver = a.no_id THEN 's' || b.sub_set END,',' ORDER BY b.sub_set,',') || ')' AS sub_tree,
-                    coalesce(trim(replace(substring(d.no_comment from E'\\\\((.+)\\\\)'), ' ','')), 'node' || b.sub_provider, '')
-                    || '->(' || string_agg(CASE WHEN b.sub_receiver = a.no_id THEN coalesce(trim(translate(e.set_comment, ' ,->', '____')), 'set' || b.sub_set) END,',' ORDER BY b.sub_set) || ')' AS sub_tree_name,
+                    coalesce(trim(regexp_replace(substring(d.no_comment from E'\\\\((.+)\\\\)'), '[^0-9A-Za-z]','_','g')), 'node' || b.sub_provider, '')
+                    || '->(' || string_agg(CASE WHEN b.sub_receiver = a.no_id THEN coalesce(trim(regexp_replace(e.set_comment, '[^0-9A-Za-z]', '_', 'g')), 'set' || b.sub_set) END,',' ORDER BY b.sub_set) || ')' AS sub_tree_name,
                     CASE " . ((substr($version,0,3) >= 2.2) ? "WHEN a.no_failed THEN 'FAILED' " : "") . "WHEN a.no_active THEN 'ACTIVE' ELSE 'INACTIVE' END AS no_status,
                     array_to_string(array(SELECT DISTINCT sub_set::text FROM $qw_clname.sl_subscribe WHERE sub_provider = a.no_id AND sub_active ORDER BY sub_set),',') AS prov_sets_active,
                     string_agg(CASE WHEN b.sub_receiver = a.no_id THEN b.sub_set::text END,',' ORDER BY b.sub_set,',') AS sub_sets    
@@ -847,8 +847,8 @@ sub loadLag {
     eval {
         $dbh = DBI->connect($dsn, $dbuser, $dbpass, {RaiseError => 1});
         $qw_clname = $dbh->quote_identifier("_" . $clname);
-        $query = "SELECT a.st_origin || ' (' || coalesce(trim(replace(substring(b.no_comment from E'\\\\((.+)\\\\)'), ' ','')), 'node' || b.no_id) || ')<->'
-                || a.st_received || ' (' || coalesce(trim(replace(substring(c.no_comment from E'\\\\((.+)\\\\)'), ' ','')), 'node' || c.no_id) || ') Events: '
+        $query = "SELECT a.st_origin || ' (' || coalesce(trim(regexp_replace(substring(b.no_comment from E'\\\\((.+)\\\\)'), '[^0-9A-Za-z]','_', 'g')), 'node' || b.no_id) || ')<->'
+                || a.st_received || ' (' || coalesce(trim(regexp_replace(substring(c.no_comment from E'\\\\((.+)\\\\)'), '[^0-9A-Za-z]','_', 'g')), 'node' || c.no_id) || ') Events: '
                 || a.st_lag_num_events || ' Time: ' || a.st_lag_time 
             FROM $qw_clname.sl_status a
             INNER JOIN $qw_clname.sl_node b on a.st_origin = b.no_id
