@@ -1264,7 +1264,7 @@ sub writeMoveSet {
                                      print SLONFILE ($line_prefix .
                                         "ECHO 'Issuing resubscribe for provider $to -> receiver $other_subs->[0]';\n");
                                     print SLONFILE ($line_prefix . 
-                                        "SUBSCRIBE NODE ( ORIGIN = $to, PROVIDER = $to, RECEIVER = $other_subs->[0] );\n");
+                                        "RESUBSCRIBE NODE ( ORIGIN = $to, PROVIDER = $to, RECEIVER = $other_subs->[0] );\n");
                                  }            
                             }
                             else {
