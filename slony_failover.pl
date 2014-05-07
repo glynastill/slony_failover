@@ -1168,7 +1168,7 @@ sub writeMoveSet {
                 if (($subs) && ($g_resubscribe_method eq 'subscribe')) { 
     
                     foreach my $other_subs (@g_cluster) {
-                        if (($other_subs->[6] ne "INACTIVE") && ($other_subs->[0] != $from) && ($other_subs->[0] != $to)) {
+                        if (($other_subs->[6] eq "ACTIVE") && ($other_subs->[0] != $from) && ($other_subs->[0] != $to)) {
 
                             if (exists $g_backups{$other_subs->[0]}) {
                                 $line_prefix = "# (Node $other_subs->[0] unavailable) ";
@@ -1236,7 +1236,7 @@ sub writeMoveSet {
             if (($subs) && ($g_resubscribe_method eq 'resubscribe')) { 
 
                 foreach my $other_subs (@g_cluster) {
-                    if (($other_subs->[6] ne "INACTIVE") && ($other_subs->[0] != $from) && ($other_subs->[0] != $to)) {
+                    if (($other_subs->[6] eq "ACTIVE") && ($other_subs->[0] != $from) && ($other_subs->[0] != $to)) {
                         if (exists $g_backups{$other_subs->[0]}) {
                             $line_prefix = "# (Node $other_subs->[0] unavailable) ";
                         }
