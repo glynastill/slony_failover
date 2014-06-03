@@ -12,8 +12,8 @@
 
 NAME=slony_failover
 USER=root
-DAEMON=/var/slony/failover/$NAME.pl
-CFGFILE=/var/slony/failover/$NAME.conf
+DAEMON=/var/slony/slony_failover/$NAME.pl
+CFGFILE=/var/slony/slony_failover/$NAME.conf
 DAEMON_OPTS="-f $CFGFILE"
 PIDFILE=/var/run/$NAME.pid
 # note: SSD is required only at startup of the daemon.
