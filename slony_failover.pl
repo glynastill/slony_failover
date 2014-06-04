@@ -1487,6 +1487,13 @@ sub lookupMsg {
     return $text;
 }
 
+sub qtrim {
+    my $string = shift;
+    $string =~ s/^('|")+//;
+    $string =~ s/('|")+$//;
+    return $string;
+}
+
 sub trim($) {
     my $string = shift;
     $string =~ s/^\s+//;
@@ -1704,109 +1711,112 @@ sub getConfig {
     my $cfgfile = shift;
     my @fields;
     my $success = false;
+    my $value;
 
     if (open(CFGFILE, "<", $cfgfile)) {
         foreach (<CFGFILE>) {
             chomp $_;
             for ($_) {
                 s/\r//;
-                s/\#.*//;
+                #s/\#.*//;
+                s/#(?=(?:(?:[^']|[^"]*+'){2})*+[^']|[^"]*+\z).*//;
             }
             if (length(trim($_))) {
                 @fields = split('=', $_, 2);
                 given(lc($fields[0])) {
+                    $value = qtrim(trim($fields[1]));
                     when(/\blang\b/i) {
-                        $g_lang = trim($fields[1]);
+                        $g_lang = $value;
                     }
                     when(/\bslony_database_host\b/i) {
-                        $g_dbhost = trim($fields[1]);
+                        $g_dbhost = $value;
                     }
                     when(/\bslony_database_port\b/i) {
-                        $g_dbport = $fields[1];
+                        $g_dbport = checkInteger($value);
                     }
                     when(/\bslony_database_name\b/i) {
-                        $g_dbname = trim($fields[1]);
+                        $g_dbname = $value;
                     }
                     when(/\bslony_database_user\b/i) {
-                        $g_dbuser = trim($fields[1]);
+                        $g_dbuser = $value; 
                     }
                     when(/\bslony_database_password\b/i) {
-                        $g_dbpass = trim($fields[1]);
+                        $g_dbpass = $value; 
                     }
                     when(/\bslony_cluster_name\b/i) {
-                        $g_clname = trim($fields[1]);
+                        $g_clname = $value; 
                     }
                     when(/\benable_debugging\b/i) {
-                        $g_debug = checkBoolean(trim($fields[1]));
+                        $g_debug = checkBoolean($value);
                     }
                     when(/\bprefix_directory\b/i) {
-                        $g_prefix = trim($fields[1]);
+                        $g_prefix = $value;
                     }
                     when(/\bseparate_working_directory\b/i) {
-                        $g_separate_working = checkBoolean(trim($fields[1]));
+                        $g_separate_working = checkBoolean($value);
                     }
                     when(/\bpid_filename\b/i) {
-                        $g_pidfile = trim($fields[1]);
+                        $g_pidfile = $value;
                     }
                     when(/\bfailover_offline_subscriber_only\b/i) {
-                        $g_fail_subonly = checkBoolean(trim($fields[1]));
+                        $g_fail_subonly = checkBoolean($value);
                     }
                     when(/\bdrop_failed_nodes\b/i) {
-                        $g_drop_failed = checkBoolean(trim($fields[1]));
+                        $g_drop_failed = checkBoolean($value);
                     }
                     when(/\blog_line_prefix\b/i) {
-                        $g_log_prefix = trim($fields[1]);
+                        $g_log_prefix = $value;
                     }
                     when(/\blog_filename\b/i) {
-                        $g_logfile = trim($fields[1]);
+                        $g_logfile = $value;
                     }
                     when(/\blog_to_postgresql\b/i) {
-                        $g_log_to_db = checkBoolean(trim($fields[1]));
+                        $g_log_to_db = checkBoolean($value);
                     }
                     when(/\blog_database_host\b/i) {
-                        $g_logdb_host = trim($fields[1]);
+                        $g_logdb_host = $value;
                     }
                     when(/\blog_database_port\b/i) {
-                        $g_logdb_port = $fields[1];
+                        $g_logdb_port = checkInteger($value);
                     }
                     when(/\blog_database_name\b/i) {
-                        $g_logdb_name = trim($fields[1]);
+                        $g_logdb_name = $value;
                     }
                     when(/\blog_database_user\b/i) {
-                        $g_logdb_user = trim($fields[1]);
+                        $g_logdb_user = $value;
                     }
                     when(/\blog_database_password\b/i) {
-                        $g_logdb_pass = trim($fields[1]);
+                        $g_logdb_pass = $value;
                     }
                     when(/\benable_try_blocks\b/i) {
-                        $g_use_try_blocks = checkBoolean(trim($fields[1]));
+                        $g_use_try_blocks = checkBoolean($value);
                     }
                     when(/\bpull_aliases_from_comments\b/i) {
-                        $g_use_comment_aliases = checkBoolean(trim($fields[1]));
+                        $g_use_comment_aliases = checkBoolean($value);
                     }
                     when(/\bslonik_path\b/i) {
-                        $g_slonikpath = trim($fields[1]);
+                        $g_slonikpath = $value;
                     }
                     when(/\blockset_method\b/i) {
-                        $g_lockset_method = trim($fields[1]);
+                        $g_lockset_method = $value;
                     }
                     when(/\benable_autofailover\b/i) {
-                        $g_autofailover = checkBoolean(trim($fields[1]));
+                        $g_autofailover = checkBoolean($value);
                     }
                     when(/\bautofailover_poll_interval\b/i) {
-                        $g_autofailover_poll_interval = checkInteger(trim($fields[1]));
+                        $g_autofailover_poll_interval = checkInteger($value);
                     }
                     when(/\bautofailover_node_retry\b/i) {
-                        $g_autofailover_retry = checkInteger(trim($fields[1]));
+                        $g_autofailover_retry = checkInteger($value);
                     }
                     when(/\bautofailover_sleep_time\b/i) {
-                        $g_autofailover_retry_sleep = checkInteger(trim($fields[1]));
+                        $g_autofailover_retry_sleep = checkInteger($value);
                     }
                     when(/\bautofailover_forwarding_providers\b/i) {
-                        $g_autofailover_provs = checkBoolean(trim($fields[1]));
+                        $g_autofailover_provs = checkBoolean($value);
                     }
                     when(/\bautofailover_config_any_node\b/i) {
-                        $g_autofailover_config_any = checkBoolean(trim($fields[1]));
+                        $g_autofailover_config_any = checkBoolean($value);
                     }
                 }
             }
