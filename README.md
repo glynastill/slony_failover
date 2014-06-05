@@ -36,7 +36,7 @@ Run as a daemon in debian:
 
 ```bash
 $ sudo cp init.debian /etc/init.d/slony_failover
-$ cp slony_failover.conf /var/slony/failover/slony_failover.conf
+$ cp slony_failover.conf /var/slony/slony_failover/slony_failover.conf
 $ sudo chmod +x /etc/init.d/slony_failover
 $ sudo update-rc.d slony_failover start 99 2 3 4 5 . stop 24 0 1 6 
 $ sudo invoke-rc.d slony_failover start
