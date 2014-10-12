@@ -1,9 +1,9 @@
 #!/usr/bin/perl
 
 # Script:	failover.pl
-# Copyright:	08/04/2012: v1.0.1 Glyn Astill <glyn@8kb.co.uk>
+# Copyright:	08/04/2012: v1.0.2 Glyn Astill <glyn@8kb.co.uk>
 # Requires:	Perl 5.10.1+, Data::UUID, File::Slurp
-#               PostgreSQL 9.0+ Slony-I 2.0+
+#               PostgreSQL 9.0+ Slony-I 1.2+ / 2.0+
 #
 # This script is a command-line utility to manage switchover and failover
 # of replication sets in Slony-I clusters.
@@ -36,7 +36,7 @@ use Config qw/%Config/;
 use constant false => 0;
 use constant true  => 1;
 
-my $g_script_version = '1.0.1';
+my $g_script_version = '1.0.2';
 my $g_debug = false;
 my $g_pidfile = '/var/run/slony_failover.pid';
 my $g_pid_written = false;
@@ -55,6 +55,7 @@ my $g_use_try_blocks = false;
 my $g_lockset_method = 'multiple';
 my $g_logfile = 'failover.log';
 my $g_input;
+my $g_silence_notice = false;
 my $g_reason;
 my $g_script;
 my $g_node_from;
@@ -88,6 +89,9 @@ my $g_autofailover_retry = 2;
 my $g_autofailover_retry_sleep = 1000;
 my $g_autofailover_provs = false;
 my $g_autofailover_config_any = true;
+my $g_autofailover_perspective_sleep = 20000;
+my $g_autofailover_majority_only = false;
+my $g_autofailover_is_quorum = false;
 my @g_unresponsive;
 my %g_backups;
 my $g_pid = $$;
@@ -95,7 +99,7 @@ my $g_pid = $$;
 
 my %message = (
 'en' => {
-    'usage'                            => q{-h <host> -p <port> -db <database> -c <cluster name> -u <username> -P <password> (Password option not recommended; use pgpass instead)},
+    'usage'                            => q{-h <host> -p <port> -db <database> -cl <cluster name> -u <username> -P <password> -f <config file> (Password option not recommended; use pgpass instead)},
     'title'                            => q{Slony-I failover script version $1},
     'cluster_fixed'                    => q{Aborting failover action: all origin nodes now responsive},
     'cluster_failed'                   => q{Found $1 failed nodes, sleeping for $2ms before retry $3 of $4},
@@ -120,10 +124,20 @@ my %message = (
     'autofailover_promote_found'       => q{Using previously found most up to date subscriber to all sets ($1) on unresponsive node $2},
     'autofailover_promote_skip'        => q{No failover required for unresponsive node $1 as it is neither the origin or an active forwarder of any sets},
     'autofailover_promote_fail'        => q{Could not find suitable backup node for promotion},
-    'autofailover_node_detail'         => q{Node $1 is $2 and provides sets $3 at $4 lag},
-    'autofailover_promote_best'        => q{Best node for promotion is node $1 seq = $2},
+    'autofailover_node_detail'         => q{Node $1 is $2 subscribed to ($3) node $4 and provides sets $5 at $6 lag ($7 events)},
+    'autofailover_node_detail_subonly' => q{Node $1 is $2 subscribed to ($3) node $4 and is a subscriber only at $5 lag ($6 events)},
+    'autofailover_promote_best'        => q{Best node for promotion is node $1 seq = $2 ($3 events)},
     'autofailover_unresponsive'        => q{Detected unresponsive provider node: $1},
     'autofailover_unresponsive_subonly'=> q{Detected unresponsive subscriber only node: $1},
+    'autofailover_pspec_check_fail'    => q{Failed to connect to node $1: $2},
+    'autofailover_pspec_check'         => q{Getting objective judgement from other nodes, apparent unresponsive nodes are : $1 (Failed nodes = $2 of $3)},
+    'autofailover_pspec_check_sleep'   => q{Sleeping for $1 ms},
+    'autofailover_pspec_check_data'    => q{$1: Node $2 says lag from node $3 -> $4 is $5 seconds},
+    'autofailover_pspec_check_true'    => q{All detected failed nodes confirmed as lagging by other nodes},
+    'autofailover_pspec_check_false'   => q{Not all nodes confirmed as lagging},
+    'autofailover_pspec_check_unknown' => q{Unable to confirm lag status of all nodes},
+    'autofailover_split_check'         => q{Surviving nodes ($1 of $2) are the majority},
+    'autofailover_split_check_fail'    => q{Surviving nodes ($1) are not the majority},
     'interactive_head_id'              => q{ID},
     'interactive_head_name'            => q{Name},
     'interactive_head_status'          => q{Status},
@@ -139,6 +153,7 @@ my %message = (
     'interactive_write_script'         => q{Writing a script to $1 node $2 to $3},
     'interactive_check_nodes'          => q{Checking availability of database nodes...},
     'interactive_continue'             => q{Do you wish to continue [y/n]?},
+    'interactive_drop_nodes'           => q{Do you want to also drop the failed nodes from the slony configuration [y/n]?},
     'interactive_preserve'             => q{Preserve subscription paths to follow the origin node (choose no if unsure) [y/n]?},
     'interactive_aliases'              => q{Generate aliases based on sl_node/set comments in parentheses (choose no if unsure) [y/n]?},
     'interactive_summary'              => q{Summary of nodes to be passed to failover:},
@@ -155,6 +170,9 @@ my %message = (
     'wrn_node_unavailable'             => q{WARNING: Node $1 unavailable},
     'wrn_req_unavailable'              => q{WARNING: Old origin node ($1) is available, however $2 subscribers are unavailable},
     'wrn_not_tested'                   => q{WARNING: Script not tested with Slony-I v$1},
+    'wrn_failover_issues'              => q{WARNING: Slony-I v$1 may struggle to failover correctly with multiple failed nodes (affects v2.0-2.1)},
+    'note_autofail_fwd_only'           => q{NOTICE: Slony versions prior to 2.2 cannot initiate failover from only failed forwarding providers},
+    'note_fail_sub_only'               => q{NOTICE: Slony versions prior to 2.2 cannot failover subscriber only nodes, reverting to failover_offline_subscriber_only = false},
     'note_multiple_try'                => q{NOTICE: Cannot lock multiple sets within try blocks in version $1 dropping back to single sets},
     'note_reshape_cluster'             => q{NOTICE: Either drop the failed subscribers or bring them back up, then retry to MOVE SET},
     'dbg_generic'                      => q{DEBUG: $1},
@@ -197,7 +215,7 @@ my %message = (
     'exit'                             => q{Exited by $1}
     },
 'fr' => {
-    'usage'                            => q{-h <host> -p <port> -db <database> -c <cluster name> -u <username> -P <password> (Option mot de passe pas recommandé; utiliser pgpass place)},
+    'usage'                            => q{-h <host> -p <port> -db <database> -cl <cluster name> -u <username> -P <password> -f <config file> (Option mot de passe pas recommandé; utiliser pgpass place)},
     'title'                            => q{Slony-I failover (basculement) version de script $1},
     'cluster_fixed'                    => q{Abandon de l'action de basculement: tous les noeuds d'origine maintenant sensible},
     'cluster_failed'                   => q{Trouvé $1 échoué noeuds, couchage pour $2 ms avant réessayer $3 de $4},
@@ -222,10 +240,20 @@ my %message = (
     'autofailover_promote_found'       => q{Utilisation précédemment trouvé plus à jour abonné à tous les jeux ($1) sur le noeud ne répond pas $2},
     'autofailover_promote_skip'        => q{Pas de failover requis pour le noeud ne répond pas $1 car il n'est ni l'origine ou un transitaire active de tous les jeux},
     'autofailover_promote_fail'        => q{Impossible de trouver le noeud de sauvegarde approprié pour la promotion},
-    'autofailover_node_detail'         => q{Noeud $1 est $2 et fournit des ensembles $3 à $4 retard},
-    'autofailover_promote_best'        => q{Meilleur noeud pour la promotion est noeud $1 suivants = $2},
+    'autofailover_node_detail'         => q{Noeud $1 est souscrit à $2 ($3) noeud $4 et fournit des ensembles de $5 à retard $6 ($7  événements)},
+    'autofailover_node_detail_subonly' => q{Noeud $1 est souscrit à $2 ($3) et le noeud $4 est un abonné à retard $5 ($6 événements)},
+    'autofailover_promote_best'        => q{Meilleur noeud pour la promotion est noeud $1 suivants = $2 ($3 événements)},
     'autofailover_unresponsive'        => q{Noeud ne répond pas détecté: $1},
     'autofailover_unresponsive_subonly'=> q{Abonné ne répond pas détecté seulement de noeud: $1},
+    'autofailover_pspec_check_fail'    => q{Impossible de se connecter au noeud $1: $2},
+    'autofailover_pspec_check'         => q{Obtenir un jugement objectif à partir d'autres noeuds, les noeuds qui ne répondent pas apparentes sont : $1 (Noeuds défaillants = $2 de $3)},
+    'autofailover_pspec_check_sleep'   => q{Dormir pour $1 ms},
+    'autofailover_pspec_check_data'    => q{$1: Noeud $2 dit décalage de $3 -> $4 noeud est $5 secondes},
+    'autofailover_pspec_check_true'    => q{Tous les noeuds détectés pas confirmés comme à la traîne par d'autres noeuds},
+    'autofailover_pspec_check_false'   => q{Pas tous les noeuds confirmé retard},
+    'autofailover_pspec_check_unknown' => q{Impossible de confirmer le statut de latence de tous les noeuds},
+    'autofailover_split_check'         => q{Autres noeuds ($1 sur $2) sont la majorité},
+    'autofailover_split_check_fail'    => q{Autres noeuds ($1) ne sont pas la majorité},
     'interactive_head_name'            => q{Nom},
     'interactive_head_status'          => q{Statut},
     'interactive_head_providers'       => q{Fournisseur IDs},
@@ -234,6 +262,7 @@ my %message = (
     'interactive_detail_3'             => q{Abonnements: },
     'interactive_choose_node'          => q{S'il vous plaît choisissez le noeud à déplacer tous les ensembles $1:},
     'interactive_confirm'              => q{Vous avez choisi de passer ensembles $1 noeud $2 ($3). Est-ce correct [o/n]? },
+    'interactive_drop_nodes'           => q{Voulez-vous laisser tomber aussi les noeuds défaillants de la configuration de slony [o/n]?},
     'interactive_action'               => q{Meilleur plan d'action est le plus susceptible de faire une $1. Voulez-vous continuer [o/n]?},
     'interactive_surrender'            => q{Uable pour déterminer le meilleur plan d'action},
     'interactive_write_script'         => q{Rédaction d'un script à $1 $2 noeud à $3},
@@ -255,6 +284,9 @@ my %message = (
     'wrn_node_unavailable'             => q{ATTENTION: Noeud $1 disponible},
     'wrn_req_unavailable'              => q{ATTENTION: Noeud Old origine ($1) est disponible, mais $2 abonnés ne sont pas disponibles},
     'wrn_not_tested'                   => q{ATTENTION: Script pas testé avec Slony-I v$1},
+    'wrn_failover_issues'              => q{ATTENTION: Slony-I v$1 peut lutter pour basculer correctement avec plusieurs nœuds défaillants (affecte v2.0-2.1)},
+    'note_autofail_fwd_only'           => q{AVIS: Versions antérieures à la 2.2 Slony ne peuvent pas initier le basculement de seulement échoué transmettre fournisseurs},
+    'note_fail_sub_only'               => q{AVIS: Versions antérieures à la 2.2 Slony ne peuvent pas basculer abonnes seuls les noeuds, revenant à failover_offile_subscriber_only = false},
     'note_multiple_try'                => q{AVIS: Vous ne pouvez pas verrouiller plusieurs ensembles dans des blocs try dans la version $1 de retomber à des jeux simples},
     'note_reshape_cluster'             => q{AVIS: Vous devez supprimer les abonnés défaillants ou les ramener, puis réessayez à MOVE SET},
     'err_generic'                      => q{ERREUR: $1},
@@ -272,7 +304,7 @@ my %message = (
     'err_cluster_empty'                => q{ERREUR: Groupe chargé contient pas de noeuds},
     'err_cluster_offline'              => q{ERREUR: Groupe chargé contient pas de noeuds accessibles},
     'err_cluster_lone'                 => q{ERRRUE: Groupe chargé ne contient que 1 noeud},
-    'err_not_origin'                   => q{ERREUR: Nœud $1 n'est pas à l'origine de tous les jeux},
+    'err_not_origin'                   => q{ERREUR: Noeud $1 n'est pas à l'origine de tous les jeux},
     'err_not_provider'                 => q{ERREUR: Noeud $1 n'est pas un fournisseur de tous les jeux},
     'err_not_provider_sets'            => q{ERREUR: Noeud $1 ne fournit pas les ensembles nécessaires: le besoin ($2), mais fournit ($3)},
     'err_no_configuration'             => q{ERREUR: Impossible de lire la configuration pour le noeud $1},
@@ -413,9 +445,6 @@ if ($g_node_count <= 0) {
     printlogln($g_prefix,$g_logfile,$g_log_prefix,lookupMsg('err_cluster_empty'));
     cleanExit(3, "system");
 }
-elsif (substr($g_version,0,1) < 2) {
-    printlogln($g_prefix,$g_logfile,$g_log_prefix,lookupMsg('wrn_not_tested', $g_version));
-}
 else {
     printlogln($g_prefix,$g_logfile,$g_log_prefix,lookupMsg('load_cluster_success', $g_version, $g_clname, $g_node_count, $g_dbhost, $g_dbport, $g_dbname));
     printlogln($g_prefix,$g_logfile,$g_log_prefix,lookupMsg('script_settings', $g_lockset_method, $g_failover_method, uc($g_resubscribe_method)));
@@ -514,6 +543,12 @@ if ($g_failover) {
     printlogln($g_prefix,$g_logfile,$g_log_prefix,"\t" . lookupMsg('interactive_failover_detail_2'));
     printlogln($g_prefix,$g_logfile,$g_log_prefix,"\t" . lookupMsg('interactive_failover_detail_3'));
     printlogln($g_prefix,$g_logfile,$g_log_prefix,"\t" . lookupMsg('interactive_failover_detail_4'));
+
+    printlog($g_prefix,$g_logfile,$g_log_prefix,lookupMsg('interactive_drop_nodes'));
+    $g_input = <>;
+    if ($g_input ~~ /^[Y|O]$/i) {
+        $g_drop_failed = true;
+    }
 
     printlog($g_prefix,$g_logfile,$g_log_prefix,lookupMsg('interactive_reason'));
     $g_reason = <>;
@@ -775,6 +810,20 @@ sub loadCluster {
             $g_failover_method = 'new';
             $g_resubscribe_method = 'resubscribe';
         }
+        else {
+            unless ($g_silence_notice) {
+                if ((substr($version,0,3) >= 2.0) && (substr($version,0,3) < 2.2)) {
+                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('wrn_failover_issues', $version));
+                }
+                printlogln($prefix,$logfile,$log_prefix,lookupMsg('note_autofail_fwd_only'));
+                $g_silence_notice = true;
+            }
+            if ($g_fail_subonly) {
+                printlogln($prefix,$logfile,$log_prefix,lookupMsg('note_fail_sub_only'));
+                $g_fail_subonly = false;
+            }
+        }
+        
     }
 
     return (scalar(@g_cluster), $version);
@@ -1001,7 +1050,7 @@ sub writePreamble {
             }
             elsif (!$g_fail_subonly) {
                 foreach my $unresponsive (@g_unresponsive) {
-                    if (($_->[0] == $unresponsive->[0]) && !defined($_->[9])) {
+                    if (($_->[0] == $unresponsive->[0]) && !defined($_->[9]) && ($g_failover_method eq 'new')) {
                         $line_prefix = "# (Node $_->[0] unavailable subscriber only) ";
                     }
                 }
@@ -1189,7 +1238,7 @@ sub writeMoveSet {
                                 @subsets = (split(',', $setlist)) ;
 
                                 if ($g_debug) {
-                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('dbg_resubscribe', $_->[1], $_->[0]), $other_subs->[0], $other_subs->[4], $setlist, $setlist_name, $node, $node_name);
+                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('dbg_resubscribe', $_->[1], $_->[0], $other_subs->[0], $other_subs->[4], $setlist, $setlist_name, $node, $node_name));
                                 }    
 
                                 if ($_->[0] ~~ @subsets) {
@@ -1319,6 +1368,16 @@ sub writeFailover {
     my $event_node;
     my ($year, $month, $day, $hour, $min, $sec) = (localtime(time))[5,4,3,2,1,0];
     my $filetime = sprintf ("%02d_%02d_%04d_%02d:%02d:%02d", $day, $month+1, $year+1900, $hour, $min, $sec);
+    my $sets = false;
+
+    my $subprov_idx;
+    my @subprov_name;
+    my ($node, $setlist);
+    my ($node_name, $setlist_name);
+    my @subsets;
+    my @subsets_name;
+    my $set_idx;
+    my @dropped;
 
     if (defined($from) && defined($to)) {
         $filename = $prefix . "/" . $clname . "-failover_from_" . $from . "_to_" . $to . "_on_" . $filetime . ".scr";
@@ -1327,7 +1386,14 @@ sub writeFailover {
         $filename = $prefix . "/" . $clname . "-autofailover_on_" . $filetime . ".scr";
     }
 
-    unless (writePreamble($filename, $dbconninfo, $clname, $dbuser, $dbpass, false, $aliases, $prefix, $logfile, $log_prefix, false)) {
+    if ($g_failover_method ne 'new') {
+        # For pre 2.2 failover with multiple nodes, we attempt to resubscribe sets and drop other failed providers;
+        # This will never work as well as 2.2+ failover behaviour (infact failover may not work as all in 2.0/2.1 with multiple failed nodes)
+        # We also need to define the sets in the preamble for this.
+        $sets = true;
+    }
+
+    unless (writePreamble($filename, $dbconninfo, $clname, $dbuser, $dbpass, $sets, $aliases, $prefix, $logfile, $log_prefix, false)) {
         printlogln($prefix,$logfile,$log_prefix,lookupMsg('err_incomplete_preamble'));
     }
 
@@ -1338,17 +1404,85 @@ sub writeFailover {
             printlogln($prefix,$logfile,$log_prefix,lookupMsg('dbg_failover_method',$g_failover_method));
         }
 
-        foreach (@g_failed) {
-            foreach my $backup (@g_cluster) {
-                if ($backup->[0] == $g_backups{$_->[0]}) {
-                    ## Here we have both details of the backup node and the failed node
-                    if ($aliases) {
-                        print SLONFILE ("ECHO 'Failing over slony cluster from $_->[4] (id $_->[0]) to $backup->[4] (id $backup->[0])';\n");
+        # If we are on pre 2.2 we need to drop failed subscriber nodes first regardless
+        if ($g_failover_method ne 'new') {
+            foreach (@g_failed) {
+                if (!defined($_->[3])) {
+                    foreach my $backup (@g_cluster) {
+                        if ($backup->[0] == $g_backups{$_->[0]}) {  # this backup node candidate is in the list of suitable nodes for {failed node}
+                            foreach my $subscriber (@g_cluster) {
+                                if (defined($subscriber->[1]) && $subscriber->[1] == $_->[0] && $subscriber->[0] != $backup->[0]) {
+                                    # mess here needs cleaning up
+                                    @subprov_name = (split(';', $subscriber->[8]));
+                                    $subprov_idx = 0;
+                                    foreach my $subprov (split(';', $subscriber->[5])) {
+                                        ($node, $setlist) = (split('->', $subprov)) ;
+                                        ($node_name, $setlist_name) = (split('->', $subprov_name[$subprov_idx])) ;
+                                        $subprov_idx++;
+                                        $node =~ s/n//g;
+    
+                                        if ($node == $_->[0]) {
+                                            if ($aliases) {
+                                                print SLONFILE ("ECHO 'Resubscribing all sets on receiver $subscriber->[4] provided by other failed node $_->[4] to backup node $backup->[4]';\n");
+                                            }
+                                            else {
+                                                print SLONFILE ("ECHO 'Resubscribing all sets on receiver $subscriber->[0]  provided by other failed node $_->[0] to backup node $backup->[0]';\n");
+                                            }
+                                            $setlist =~ s/(\)|\(|s)//g;
+                                            @subsets = (split(',', $setlist));
+                                            $setlist_name =~ s/(\)|\()//g;
+                                            @subsets_name = (split(',', $setlist_name));
+                                        
+                                            $set_idx = 0;
+                                            foreach my $subset (@subsets) {
+                                                if ($aliases) {
+                                                    print SLONFILE ("SUBSCRIBE SET (ID = \@$subsets_name[$set_idx], PROVIDER = \@$backup->[4], RECEIVER = \@$subscriber->[4], FORWARD = YES);\n");
+                                                    print SLONFILE ("WAIT FOR EVENT (ORIGIN = \@$backup->[4], CONFIRMED = \@$subscriber->[4], WAIT ON = \@$backup->[4]);\n");
+                                                }
+                                                else {
+                                                    print SLONFILE ("SUBSCRIBE SET (ID = $subset, PROVIDER = $backup->[0], RECEIVER = $subscriber->[0], FORWARD = YES);\n");
+                                                    print SLONFILE ("WAIT FOR EVENT (ORIGIN = $backup->[0], CONFIRMED = $subscriber->[0], WAIT ON = $backup->[0]);\n");
+                                                }
+                                                $set_idx++;
+                                            }
+                                            print SLONFILE ("\n");
+                                        }
+                                    }
+    
+                                    if ($aliases) {
+                                        print SLONFILE ("ECHO 'Dropping other failed node $_->[4] ($_->[0])';\n");
+                                         print SLONFILE ("DROP NODE (ID = \@$_->[4], EVENT NODE = \@$backup->[4]);\n\n");
+                                    }
+                                    else {
+                                        print SLONFILE ("ECHO 'Dropping other failed node $_->[0]';\n");
+                                        print SLONFILE ("DROP NODE (ID = $_->[0], EVENT NODE = $backup->[0]);\n\n");
+                                    }   
+                                    push(@dropped, $_->[0]);
+                                }
+                                else {
+                                    # The node is failed, but there are no downstream subscribers
+                                }
+                            }
+                            last;
+                        }
                     }
-                    else {
-                        print SLONFILE ("ECHO 'Failing over slony cluster from node $_->[0] to node $backup->[0]';\n");
-                    }   
-                    last;
+                }
+            }
+        }
+
+        foreach (@g_failed) {
+            if (($g_failover_method eq 'new') || defined($_->[3])) {
+                foreach my $backup (@g_cluster) {
+                    if ($backup->[0] == $g_backups{$_->[0]}) {
+                        ## Here we have both details of the backup node and the failed node
+                        if ($aliases) {
+                            print SLONFILE ("ECHO 'Failing over slony cluster from $_->[4] (id $_->[0]) to $backup->[4] (id $backup->[0])';\n");
+                        }
+                        else {
+                            print SLONFILE ("ECHO 'Failing over slony cluster from node $_->[0] to node $backup->[0]';\n");
+                        }   
+                        last;
+                    }
                 }
             }
         }
@@ -1356,47 +1490,46 @@ sub writeFailover {
         print SLONFILE ("FAILOVER (\n\t");
         $written = 0;
         foreach (@g_failed) {
-            foreach my $backup (@g_cluster) {
-
-                if ($backup->[0] == $g_backups{$_->[0]}) {
-                    ## Here we have both details of the backup node and the failed node
-                    if ($g_failover_method eq 'new') {
-                        if( $written != 0 ) {
-                            print SLONFILE (",\n\t");
+            if (($g_failover_method eq 'new') || defined($_->[3])) {
+                foreach my $backup (@g_cluster) {
+                    if ($backup->[0] == $g_backups{$_->[0]}) {
+                        ## Here we have both details of the backup node and the failed node
+                        if ($g_failover_method eq 'new') {
+                            if( $written != 0 ) {
+                                print SLONFILE (",\n\t");
+                            }
+                            print SLONFILE ("NODE = (");
                         }
-                        print SLONFILE ("NODE = (");
-                    }
-                    else {
-                        if( $written != 0 ) {
-                            print SLONFILE ("\n);\nFAILOVER (\n\t");
+                        else {
+                            if( $written != 0 ) {
+                                print SLONFILE ("\n);\nFAILOVER (\n\t");
+                            }
                         }
+                        if ($aliases) {
+                            print SLONFILE ("ID = \@$_->[4], BACKUP NODE = \@$backup->[4]");
+                        }
+                        else {
+                            print SLONFILE ("ID = $_->[0], BACKUP NODE = $backup->[0]");
+                        }
+                        if ($g_failover_method eq 'new') {
+                            print SLONFILE (")");
+                        }
+                        last;
                     }
-                    if ($aliases) {
-                        print SLONFILE ("ID = \@$_->[4], BACKUP NODE = \@$backup->[4]");
-                    }
-                    else {
-                        print SLONFILE ("ID = $_->[0], BACKUP NODE = $backup->[0]");
-                    }
-                    if ($g_failover_method eq 'new') {
-                        print SLONFILE (")");
-                    }
-                    last;
                 }
+                $written++;
             }
-            $written++;
         }
-        print SLONFILE ("\n);\n");
+        print SLONFILE ("\n);\n\n");
 
         if ($g_drop_failed) {
-
-
             if (($g_failover_method eq 'new')  && (scalar(@g_failed) > 1)) {
                 foreach (@g_failed) {
                     if ($aliases) {
-                        print SLONFILE ("ECHO 'Dropping node $_->[4] ($_->[0])';\n");
+                        print SLONFILE ("ECHO 'Dropping failed node $_->[4] ($_->[0])';\n");
                     }
                     else {
-                        print SLONFILE ("ECHO 'Dropping node $_->[0]';\n");
+                        print SLONFILE ("ECHO 'Dropping failed node $_->[0]';\n");
                     }   
                 }
 
@@ -1419,7 +1552,7 @@ sub writeFailover {
                             if( $written != 0 ) {
                                 print SLONFILE (",");
                             }
-                            ## Don;t bother being pissy and trying to define array values 
+                            ## Don't bother trying to define array values 
                             #if ($aliases) {
                             #    print SLONFILE "\@$_->[4]";
                             #}
@@ -1428,14 +1561,14 @@ sub writeFailover {
                             #}
                             $written++;
                         }
-                        else {
+                        elsif (($g_failover_method eq 'new') || defined($_->[3]) || !($_->[0] ~~ @dropped)) {
                             if ($aliases) {
-                                print SLONFILE ("ECHO 'Dropping node $_->[4] ($_->[0])';\n");
-                                print SLONFILE ("DROP NODE (ID = \@$_->[4], EVENT NODE = \@$backup->[4]);\n");
+                                print SLONFILE ("ECHO 'Dropping failed node $_->[4] ($_->[0])';\n");
+                                print SLONFILE ("DROP NODE (ID = \@$_->[4], EVENT NODE = \@$backup->[4]);\n\n");
                             }
                             else {
-                                print SLONFILE ("ECHO 'Dropping node $_->[0]';\n");
-                                print SLONFILE ("DROP NODE (ID = $_->[0], EVENT NODE = $backup->[0]);\n");
+                                print SLONFILE ("ECHO 'Dropping failed node $_->[0]';\n");
+                                print SLONFILE ("DROP NODE (ID = $_->[0], EVENT NODE = $backup->[0]);\n\n");
                             }
                         }
                         last;
@@ -1818,6 +1951,15 @@ sub getConfig {
                     when(/\bautofailover_config_any_node\b/i) {
                         $g_autofailover_config_any = checkBoolean($value);
                     }
+                    when(/\bautofailover_perspective_sleep_time\b/i) {
+                        $g_autofailover_perspective_sleep = checkInteger($value);
+                    }
+                    when(/\bautofailover_majority_only\b/i) {
+                        $g_autofailover_majority_only = checkBoolean($value);
+                    }
+                    when(/\bautofailover_is_quorum\b/i) {
+                        $g_autofailover_is_quorum  = checkBoolean($value);
+                    }
                 }
             }
         }
@@ -1975,22 +2117,24 @@ sub autoFailover {
                 }
             }
             if ($failed > 0) {
-                $actions = findBackup($clname, $dbuser, $dbpass, $prefix, $logfile, $log_prefix);
-                if ($actions > 0) {
-                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_proceed'));
-                    foreach my $failed ( keys %g_backups ) {
-                        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_detail', $failed, $g_backups{$failed}));
+                if ((!$g_autofailover_majority_only || checkSplit($prefix, $logfile, $log_prefix)) && (($g_autofailover_perspective_sleep <= 0) || checkPerspective($clname, $dbuser, $dbpass, $prefix, $logfile, $log_prefix))) {
+                    $actions = findBackup($clname, $dbuser, $dbpass, $prefix, $logfile, $log_prefix);
+                    if ($actions > 0) {
+                        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_proceed'));
+                        foreach my $failed ( keys %g_backups ) {
+                            printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_detail', $failed, $g_backups{$failed}));
+                        }
+                        $g_script = writeFailover($prefix, $dbconninfo, $clname, $dbuser, $dbpass, undef, undef, $g_subs_follow_origin, $g_use_comment_aliases, $logfile, $log_prefix);   
+                        unless (runSlonik($g_script, $prefix, $logfile, $log_prefix)) {
+                            printlogln($prefix,$logfile,$log_prefix,lookupMsg('err_execute_fail', 'slonik script', $g_script));
+                        }
+                        $cluster_loaded = false;
+                        #print "SCRIPT: $g_script\n";
+                        #exit(0);
                     }
-                    $g_script = writeFailover($prefix, $dbconninfo, $clname, $dbuser, $dbpass, undef, undef, $g_subs_follow_origin, $g_use_comment_aliases, $logfile, $log_prefix);   
-                    unless (runSlonik($g_script, $prefix, $logfile, $log_prefix)) {
-                        printlogln($prefix,$logfile,$log_prefix,lookupMsg('err_execute_fail', 'slonik script', $g_script));
+                    else {
+                        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_halt', $failed));
                     }
-                    $cluster_loaded = false;
-                    #print "SCRIPT: $g_script\n";
-                    #exit(0);
-                }
-                else {
-                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_halt', $failed));
                 }
             }
             usleep($g_autofailover_poll_interval * 1000);
@@ -2000,6 +2144,165 @@ sub autoFailover {
         }
 
     }
+}
+
+sub checkSplit {
+    my $prefix = shift;
+    my $logfile = shift;
+    my $log_prefix = shift;
+
+    my $majority = false; 
+    my $failed = scalar(@g_unresponsive);
+    my $survivers = (scalar(@g_cluster) - scalar(@g_unresponsive));
+
+    if ($survivers > $failed) {
+        $majority = true; 
+        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_split_check', $survivers, ($survivers+$failed)));
+    }
+    elsif (($survivers == $failed) && $g_autofailover_is_quorum) {
+        $majority = true; 
+        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_split_check', ($survivers . '+quorum'), ($survivers+$failed)));
+    }
+    else {
+        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_split_check_fail', $survivers));
+    }
+
+    return $majority;
+}
+
+# Check each nodes perspective of the failure to try to ensure the issue isn't that this script just can't connect to the origin/provider
+# The idea here is just to wait for a short period of time and see if the lag time for the nodes has increased by the same amount.
+sub checkPerspective {
+    my $clname = shift;
+    my $dbuser = shift;
+    my $dbpass = shift;
+    my $prefix = shift;
+    my $logfile = shift;
+    my $log_prefix = shift;
+
+    my $dsn;
+    my $dbh;
+    my $sth;
+    my $query;
+    my $qw_clname;
+    my $param_on;
+    my $agreed = false;
+    my @unresponsive_ids;
+    my $lag_idx;
+    my $lag_confirmed;
+    my @lag_info1;
+    my @lag_info2;
+    my $bad = 0;
+
+    foreach (@g_unresponsive) {
+        push(@unresponsive_ids, $_->[0]);
+    }
+    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check', join(", ", @unresponsive_ids), scalar(@g_unresponsive), scalar(@g_cluster)));
+
+    foreach (@g_cluster) {
+        unless ($_->[0] ~~ @unresponsive_ids)  {
+            $dsn = "DBI:Pg:$_->[2];";
+            eval {
+                $dbh = DBI->connect($dsn, $dbuser, $dbpass, {RaiseError => 1});
+                $qw_clname = $dbh->quote_identifier("_" . $clname);
+
+                $query = "SELECT a.st_origin, a.st_received, extract(epoch from a.st_lag_time)::integer
+                        FROM _test_replication.sl_status a
+                        INNER JOIN _test_replication.sl_node b on a.st_origin = b.no_id
+                        INNER JOIN _test_replication.sl_node c on a.st_received = c.no_id
+                        WHERE a.st_received IN (" . substr('?, ' x scalar(@unresponsive_ids), 0, -2) . ") ORDER BY a.st_origin, a.st_received;";
+
+                $sth = $dbh->prepare($query);
+
+                $param_on = 1; 
+                foreach (@unresponsive_ids) {
+                    $sth->bind_param($param_on, $_);
+                    $param_on++;
+                }
+                $sth->execute();
+
+                while (my @node_lag = $sth->fetchrow) { 
+                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_data', 'Check1', $_->[0], $node_lag[0], $node_lag[1], $node_lag[2]));
+                    push(@lag_info1, \@node_lag);
+                }
+
+                $sth->finish;
+                $dbh->disconnect();
+            };
+            if ($@) {
+                printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_fail', $_->[0], $@));
+                $bad++;
+            } 
+        }
+    }
+
+    if ($bad == 0) {
+        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_sleep', $g_autofailover_perspective_sleep));
+        usleep($g_autofailover_perspective_sleep * 1000);
+
+        foreach (@g_cluster) {
+            unless ($_->[0] ~~ @unresponsive_ids)  {
+                $dsn = "DBI:Pg:$_->[2];";
+                eval {
+                    $dbh = DBI->connect($dsn, $dbuser, $dbpass, {RaiseError => 1});
+                    $qw_clname = $dbh->quote_identifier("_" . $clname);
+
+                    $query = "SELECT a.st_origin, a.st_received, extract(epoch from a.st_lag_time)::integer
+                            FROM _test_replication.sl_status a
+                            INNER JOIN _test_replication.sl_node b on a.st_origin = b.no_id
+                            INNER JOIN _test_replication.sl_node c on a.st_received = c.no_id
+                            WHERE a.st_received IN (" . substr('?, ' x scalar(@unresponsive_ids), 0, -2) . ") ORDER BY a.st_origin, a.st_received;";
+
+                    $sth = $dbh->prepare($query);
+
+                    $param_on = 1;
+                    foreach (@unresponsive_ids) {
+                        $sth->bind_param($param_on, $_);
+                        $param_on++;
+                    }
+                    $sth->execute();
+
+                    while (my @node_lag = $sth->fetchrow) {
+                        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_data', 'Check2', $_->[0], $node_lag[0], $node_lag[1], $node_lag[2]));
+                        push(@lag_info2, \@node_lag);
+                    }
+
+                    $sth->finish;
+                    $dbh->disconnect();
+                };
+                if ($@) {
+                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_fail', $_->[0], $@));
+                    $bad++;
+                }
+            }
+        }
+
+        $lag_idx = 0;
+        $lag_confirmed = 0;
+        foreach (@lag_info1) {
+            if ($g_debug) {
+                printlogln($prefix,$logfile,$log_prefix,lookupMsg('dbg_generic', ("Node $_->[0] lag between checks on node $_->[1] is " . ($lag_info2[$lag_idx]->[2]-$_->[2]) . " seconds")));
+            }
+
+            if ((($lag_info2[$lag_idx]->[2]-$_->[2])*1000) >= $g_autofailover_perspective_sleep) {
+                $lag_confirmed++;
+            }
+            $lag_idx++;
+        }  
+    }
+
+    if ($bad > 0) {
+        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_unknown'));
+    }   
+    elsif ($lag_idx == $lag_confirmed) {
+        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_true'));
+        $agreed = true;
+    } 
+    else {
+        printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_pspec_check_false'));
+    }
+
+    return $agreed;
 }
 
 sub checkFailed {
@@ -2055,7 +2358,9 @@ sub checkFailed {
                 push(@g_unresponsive, \@$_); 
                 if ((defined($_->[3])) || ($g_autofailover_provs && defined($_->[9]))) {
                     printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_unresponsive', $_->[0]));
-                    $prov_failed++;
+                    unless ($g_failover_method ne 'new' && !defined($_->[3])) {
+                        $prov_failed++;
+                    }
                 }
                 else {
                     printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_unresponsive_subonly', $_->[0]));
@@ -2093,7 +2398,8 @@ sub findBackup {
     my $query;
     my $qw_clname;
     my $result_count = 0;
-    my $lowest_lag;
+    my $lowest_lag_time;
+    my $lowest_lag_events;
     my $best_node_id;    
     my $best_node_is_direct;    
     my @sets_from;
@@ -2108,7 +2414,8 @@ sub findBackup {
             printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_promote_find', ($_->[9] // "none"), $_->[0]));
 
             undef $best_node_id;
-            $lowest_lag = (1<<$Config{ivsize}*8-1)-1;
+            $lowest_lag_time = (1<<$Config{ivsize}*8-1)-1;
+            $lowest_lag_events = $lowest_lag_time;
 
             if (defined($_->[9]) && (exists $backup_for_set_chosen{$_->[9]})) {
                 $best_node_id = $backup_for_set_chosen{$_->[9]};
@@ -2127,11 +2434,11 @@ sub findBackup {
                             $dbh = DBI->connect($dsn, $dbuser, $dbpass, {RaiseError => 1});
                             $qw_clname = $dbh->quote_identifier("_" . $clname);
 
-                            $query = "SELECT extract(epoch from a.st_lag_time), (a.st_received = ?) AS direct 
+                            $query = "SELECT extract(epoch from a.st_lag_time), a.st_lag_num_events, (a.st_received = ?) AS direct
                                 FROM $qw_clname.sl_status a
                                 INNER JOIN $qw_clname.sl_subscribe b ON b.sub_provider = a.st_received AND b.sub_receiver = a.st_origin
                                 WHERE b.sub_active 
-                                GROUP BY a.st_lag_time, a.st_received;";
+                                GROUP BY a.st_lag_time, a.st_lag_num_events, a.st_received;";
 
                             $sth = $dbh->prepare($query);
                             $sth->bind_param(1, $_->[0]);
@@ -2141,22 +2448,23 @@ sub findBackup {
 
                                 undef @sets_from;
                                 if (defined($_->[9])) {
-                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_node_detail', $subscriber->[0], ($subinfo[1] ? "a direct subscriber" : "an indirect subscriber"), $subscriber->[7], $subinfo[0]));
+                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_node_detail', $subscriber->[0], ($subinfo[2]?"directly":"indirectly"), (defined($_->[3])?"origin":"provider"), $_->[0], $subscriber->[7], $subinfo[0], $subinfo[1]));
                                     @sets_from = split(',',$_->[9]);
                                     @sets_to = split(',',$subscriber->[7]);
                                 }
                                 elsif ($g_fail_subonly) {
                                     # Subscriber only node will have no active sets forwarding sets to check
-                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_node_detail', $subscriber->[0], "suitable backup for this subscriber only node"  , $subscriber->[7], $subinfo[0]));
+                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_node_detail_subonly', $subscriber->[0], ($subinfo[2]?"directly":"indirectly"), (defined($_->[3])?"origin":"provider"), $_->[0], $subinfo[0], $subinfo[1]));
                                     @sets_from = (0);
                                     @sets_to = (0);
                                 }
 
-                                if ((checkProvidesAllSets(\@sets_from, \@sets_to)) && (($subinfo[0] < $lowest_lag) || (!$best_node_is_direct && $subinfo[1]))) {
-                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_promote_best', $subscriber->[0], $subinfo[0]));
+                                if ((checkProvidesAllSets(\@sets_from, \@sets_to)) && (($subinfo[0] < $lowest_lag_time && ($subinfo[2] || !defined($best_node_id))) || (!$best_node_is_direct && $subinfo[2]))) {
+                                    printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_promote_best', $subscriber->[0], $subinfo[0], $subinfo[1]));
                                     $best_node_id = $subscriber->[0];
-                                    $lowest_lag = $subinfo[0];
-                                    $best_node_is_direct = $subinfo[1];
+                                    $lowest_lag_time = $subinfo[0];
+                                    $lowest_lag_events = $subinfo[1];
+	                            $best_node_is_direct = $subinfo[2];
                                 }
                             }
                         };

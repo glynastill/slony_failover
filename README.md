@@ -45,7 +45,7 @@ $ sudo invoke-rc.d slony_failover start
 ##Command line parameters
 
 ```bash
-$ ./failover.pl [options]
+$ ./slony_failover.pl [options]
 ```
 
 |Switch    | Description
@@ -68,7 +68,7 @@ $ ./failover.pl [options]
 | General     |**separate_working_directory**                | boolean                       | *'true'*                        | Append a separate working directory to the prefix_directory for each run
 | General     |**slonik_path**                               | /full/path/to/bin/directory   | *null*                          | Slonik binary if not in current path
 | General     |**pid_filename**                              | /path/to/pidfile              | *'/var/run/slony_failover.pid'* | Pid file to use when running in autofailover mode
-| General     |**enable_try_blocks**                         | boolean                       | *false*                         |    Write slonik script with try blocks where possible to aid error handling
+| General     |**enable_try_blocks**                         | boolean                       | *false*                         | Write slonik script with try blocks where possible to aid error handling
 | General     |**lockset_method**                            | single/multiple               | *'multiple'*                    | Write slonik script that locks all sets
 | General     |**pull_aliases_from_comments**                | boolean                       | *false*                         | If true, script will pull text from comment fields and use to generate
 |             |                                              |                               |                                 | possibly meaningful aliases for nodes and sets.
@@ -102,9 +102,20 @@ $ ./failover.pl [options]
 | Autofailover|**autofailover_forwarding_providers**         | boolean                       | *'false'*                       | If true a failure of a pure forwarding provider will also trigger failover
 | Autofailover|**autofailover_config_any_node**              | boolean                       | *'true'*                        | After reading the initial cluster configuration, subsequent reads of the configuration 
 |             |                                              |                               |                                 | will use conninfo read from sl_subscribe to read from any node.
-| Autofailover|**autofailover_poll_interval**                | integer                       | 500                             | How often to check for failure of nodes (milliseconds)
-| Autofailover|**autofailover_node_retry**                   | integer                       | 2                               | When failure is detected, retry this many times before initiating failover
-| Autofailover|**autofailover_sleep_time**                   | integer                       | 1000                            | Interval between retries (milliseconds)
+| Autofailover|**autofailover_poll_interval**                | integer                       | *500*                           | How often to check for failure of nodes (milliseconds)
+| Autofailover|**autofailover_node_retry**                   | integer                       | *2*                             | When failure is detected, retry this many times before initiating failover
+| Autofailover|**autofailover_sleep_time**                   | integer                       | *1000*                          | Interval between retries (milliseconds)
+| Autofailover|**autofailover_perspective_sleep_time**       | integer                       | *20000*                         | Interval between lag reads for failed nodes from surviving nodes. If greater 
+                                                                                                                               | than zero any observation that nodes have failed is checked from surviving nodes
+                                                                                                                               | perspective by checking if lag times are extending.  This does not guarantee 100%
+                                                                                                                               | the nodes are down but if set to a large enough interval can back up our observation.
+| Autofailover|**autofailover_majority_only**                | boolean                       | *false*                         | Only fail over if the quantity of surviving nodes is greater than the quantity of
+                                                                                                                               | failed nodes.  Intended to be used to prevent a split-brain scenario in 
+                                                                                                                               | conjunction with some other logic to monitor and fence off the old origin if it
+                                                                                                                               | is in the minority.
+| Autofailover|**autofailover_is_quorum**                    | boolean                       | *false*                         | If this script is running on a separate host set to true to treat it as a quorum
+                                                                                                                               | server. Effectively increments sum of surviving nodes when calculating the 
+                                                                                                                               | majority above.
 
 Changes
 -------
@@ -113,6 +124,7 @@ Changes
 * 04/11/2012 - Experiment with different use of try blocks (currently can't use multiple lock sets indide try)
 * 13/04/2014 - Update to work differently for Slony 2.2+
 * 05/05/2014 - Experiment with autofailover ideas
+* 10/09/2014 - Add some logic to autofailover for doing extra checks from perspective of other nodes. Still a naive autofailover implementaition imho.
 
 Licence
 -------
