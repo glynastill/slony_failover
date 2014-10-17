@@ -798,9 +798,9 @@ sub loadCluster {
         die lookupMsg('err_pgsql_connect');
     }
     else {
-        if (substr($version,0,1) < 2) {
-            printlogln($prefix,$logfile,$log_prefix,lookupMsg('wrn_not_tested', $version));
-        }
+        #if (substr($version,0,1) < 2) {
+        #    printlogln($prefix,$logfile,$log_prefix,lookupMsg('wrn_not_tested', $version));
+        #}
         if (($g_use_try_blocks) && ($g_lockset_method eq 'multiple') && (substr($version,0,3) <= 9.9)) {
             # It's currently not possible to lock multiple sets at a time within a try block (v2.2.2), leave the logic in and set a high version number for now.
             printlogln($prefix,$logfile,$log_prefix, lookupMsg('note_multiple_try', $version));
