@@ -37,7 +37,7 @@ use constant false => 0;
 use constant true  => 1;
 
 my $g_script_version = '1.0.3';
-my $g_debug = false;
+my $g_debug = true;
 my $g_pidfile = '/var/run/slony_failover.pid';
 my $g_pid_written = false;
 my $g_lang = 'en';
@@ -97,7 +97,7 @@ my %g_unresponsive_subonly;
 my %g_backups;
 my $g_pid = $$;
 
-
+# Hash containing messages used by lookupMsg()
 my %message = (
 'en' => {
     'usage'                            => q{-h <host> -p <port> -db <database> -cl <cluster name> -u <username> -P <password> -f <config file> (Password option not recommended; use pgpass instead)},
@@ -364,7 +364,7 @@ else {
     }
 }
 
-# Fill in any missing values with defaults or display message and die
+# Display message and die if any of the required configuration variables are missing
 if (!defined($g_dbname)) {
     println(lookupMsg('err_no_database'));
     die lookupMsg('usage');
@@ -608,6 +608,7 @@ cleanExit(0, "script completion");
 
 ###########################################################################################################################################
 
+# Display exit message, insert log file into database if requested, delete any pid files and exit with the requested code
 sub cleanExit {
     my $exit_code = shift;
     my $type = shift;
@@ -627,10 +628,12 @@ sub cleanExit {
     exit($exit_code);
 }
 
+# Exit on caught signal
 sub sigExit {
     cleanExit(100,'signal');    
 }
 
+# Check we can reach each node in the cluster and that it contains the Slony schema
 sub checkNodes {
     my $clname = shift;
     my $dbuser = shift;
@@ -717,6 +720,18 @@ sub checkNodes {
     return ($result_count, $critical_count);
 }
 
+# Load information on all nodes in the Slony cluster into global @g_cluster:
+# 0) no_id = Node id of this node 
+# 1) no_provs =  Comma separated list of all provider node ids
+# 2) no_conninfo =  Conninfo as recorded in sl_path
+# 3) origin_sets = Comma separated list of set ids originating on this node
+# 4) no_name = Node name; this is extracted from text between parentheses in sl_node.no_comment
+# 5) no_sub_tree = Text representation of subscriptions in the form n<provider node id>->(s<set id>, ..)
+# 6) no_status = Text representing the state of the node; either ACTIVE,INACTIVE or FAILED
+# 7) sub_sets = Comma separated list of all set ids this node is subscribed to 
+# 8) no_sub_tree_name = As per no_sub_tree but holds textual names extracted from sl_node.no_comment
+# 9) prov_sets_active = Comma separated list of all set ids this node is actively forwarding
+# 10) prov_sets = Comma separated list of all set ids this node is subscribed to and able to forward
 sub loadCluster {
     my $dbconninfo = shift;
     my $clname = shift;
@@ -753,14 +768,14 @@ sub loadCluster {
                 SELECT a.no_id, b.sub_provider AS no_prov,
                     COALESCE(c.pa_conninfo,(SELECT pa_conninfo FROM $qw_clname.sl_path WHERE pa_server = $qw_clname.getlocalnodeid(?) LIMIT 1)) AS no_conninfo,
                     array_to_string(array(SELECT set_id FROM $qw_clname.sl_set WHERE set_origin = a.no_id ORDER BY set_id),',') AS origin_sets,
-                    string_agg(CASE WHEN b.sub_receiver = a.no_id AND b.sub_forward AND b.sub_active THEN b.sub_set::text END, ',' ORDER BY b.sub_set) AS prov_sets,
+                    string_agg(CASE WHEN b.sub_receiver = a.no_id AND b.sub_forward AND b.sub_active THEN b.sub_set::text END, ',' ORDER BY b.sub_set) AS sub_sets,
                     coalesce(trim(regexp_replace(substring(a.no_comment from E'\\\\((.+)\\\\)'), '[^0-9A-Za-z]','_','g')), 'node' || a.no_id) AS no_name,
                     'n' || b.sub_provider || '->(' || string_agg(CASE WHEN b.sub_receiver = a.no_id THEN 's' || b.sub_set END,',' ORDER BY b.sub_set,',') || ')' AS sub_tree,
                     coalesce(trim(regexp_replace(substring(d.no_comment from E'\\\\((.+)\\\\)'), '[^0-9A-Za-z]','_','g')), 'node' || b.sub_provider, '')
                     || '->(' || string_agg(CASE WHEN b.sub_receiver = a.no_id THEN coalesce(trim(regexp_replace(e.set_comment, '[^0-9A-Za-z]', '_', 'g')), 'set' || b.sub_set) END,',' ORDER BY b.sub_set) || ')' AS sub_tree_name,
                     CASE " . ((substr($version,0,3) >= 2.2) ? "WHEN a.no_failed THEN 'FAILED' " : "") . "WHEN a.no_active THEN 'ACTIVE' ELSE 'INACTIVE' END AS no_status,
                     array_to_string(array(SELECT DISTINCT sub_set::text FROM $qw_clname.sl_subscribe WHERE sub_provider = a.no_id AND sub_active ORDER BY sub_set),',') AS prov_sets_active,
-                    string_agg(CASE WHEN b.sub_receiver = a.no_id THEN b.sub_set::text END,',' ORDER BY b.sub_set,',') AS sub_sets    
+                    string_agg(CASE WHEN b.sub_receiver = a.no_id THEN b.sub_set::text END,',' ORDER BY b.sub_set,',') AS prov_sets    
                 FROM $qw_clname.sl_node a
                 LEFT OUTER JOIN $qw_clname.sl_subscribe b ON a.no_id = b.sub_receiver
                 LEFT OUTER JOIN $qw_clname.sl_path c ON c.pa_server = a.no_id AND c.pa_client = $qw_clname.getlocalnodeid(?)
@@ -776,10 +791,10 @@ sub loadCluster {
                     no_name,
                     nullif(string_agg(sub_tree, ';' ORDER BY sub_tree),'') AS no_sub_tree,
                     no_status,
-                    nullif(string_agg(prov_sets::text, ',' ORDER BY prov_sets),'') AS prov_sets,
+                    nullif(string_agg(sub_sets::text, ',' ORDER BY prov_sets),'') AS sub_sets,
                     nullif(string_agg(sub_tree_name, ';' ORDER BY sub_tree_name),'') AS no_sub_tree_name,
                     nullif(string_agg(prov_sets_active::text, ',' ORDER BY prov_sets_active),'') AS prov_sets_active,
-                    nullif(string_agg(sub_sets::text, ',' ORDER BY sub_sets),'') AS no_subs
+                    nullif(string_agg(prov_sets::text, ',' ORDER BY sub_sets),'') AS prov_sets
                 FROM z GROUP BY no_id, no_conninfo, no_name, no_status";
         $sth = $dbh->prepare($query);
 
@@ -835,6 +850,7 @@ sub loadCluster {
     return (scalar(@g_cluster), $version);
 }
 
+# Load all sets originating on a node into global @g_sets
 sub loadSets {
     my $dbconninfo = shift;
     my $clname = shift;
@@ -881,6 +897,8 @@ sub loadSets {
     return scalar(@g_sets);
 }
 
+# Load information regarding replication lag from sl_status into @g_lags 
+# If loading from a node that is not the intended origin then this information might not be that accurate/useful
 sub loadLag {
     my $dbconninfo = shift;
     my $clname = shift;
@@ -929,6 +947,7 @@ sub loadLag {
     return scalar(@g_lags);
 }
 
+# Prompt user for nodes to an from in interactive mode and do some checking
 sub chooseNode {
     my $type = shift;
     my $prefix = shift;
@@ -1020,6 +1039,7 @@ sub chooseNode {
     return $choice;
 }
 
+# Write a slonik preamble section using information pulled into @g_cluster and @g_sets by loadCluster() and loadSets() functions
 sub writePreamble {
     my $filename = shift;
     my $dbconninfo = shift;
@@ -1090,6 +1110,7 @@ sub writePreamble {
     return $success;
 }
 
+# Write slonik commands to move sets
 sub writeMoveSet {
     my $prefix = shift;
     my $dbconninfo = shift;
@@ -1357,6 +1378,7 @@ sub writeMoveSet {
     return $filename;
 }
 
+# Write slonik commands to failover sets
 sub writeFailover {
     my $prefix = shift;
     my $dbconninfo = shift;
@@ -1599,6 +1621,7 @@ sub writeFailover {
 
 }
 
+# Used to return informational text from the %message hashes, pretty much entirely stolen from check_postgres (http://bucardo.org)
 sub lookupMsg {
     my $name = shift || '?';
     my $line_call;
@@ -1626,6 +1649,7 @@ sub lookupMsg {
     return $text;
 }
 
+# Trim quotes off a string
 sub qtrim {
     my $string = shift;
     $string =~ s/^('|")+//;
@@ -1633,6 +1657,7 @@ sub qtrim {
     return $string;
 }
 
+# Trim a string
 sub trim($) {
     my $string = shift;
     $string =~ s/^\s+//;
@@ -1640,10 +1665,12 @@ sub trim($) {
     return $string;
 }
 
+# Print command with a linefeed
 sub println {
     print ((@_ ? join($/, @_) : $_), $/);
 }
 
+# Print to stdout and the logfile, doing some replacements allong the way for logging
 sub printlog {
     my $prefix = shift;
     my $logfile_name = shift;
@@ -1687,10 +1714,12 @@ sub printlog {
     }
 }
 
+# Printlog command with a linefeed
 sub printlogln {
     printlog ($_[0], $_[1], $_[2], $_[3] . $/);
 }
 
+# Insert details of any action into a database table
 sub logDB {
     my $dbconninfo = shift;
     my $dbuser = shift;
@@ -1754,6 +1783,7 @@ sub logDB {
     return true;
 }
 
+# Returns a uuid used for the failover script directory
 sub getUUID {
     my $date_string = shift;
     my $g_ug  = new Data::UUID;
@@ -1762,6 +1792,7 @@ sub getUUID {
     return $g_uuid_str;
 }
 
+# Write out a PID file
 sub writePID {
     my $prefix = shift;
     my $logfile = shift;
@@ -1791,6 +1822,7 @@ sub writePID {
     return $success;
 }
 
+# Remove the PID file
 sub removePID {
     my $prefix = shift;
     my $logfile = shift;
@@ -1823,6 +1855,7 @@ sub removePID {
     return $success;
 }
 
+# Check all sets from an originationg node are contained in the list provided by another node
 sub checkProvidesAllSets { 
     my ($originSets, $providerSets) = @_;
     my %test_hash;
@@ -1833,6 +1866,7 @@ sub checkProvidesAllSets {
     return !%test_hash;              # return false if any keys are left in the hash
 }
 
+# Check any sets from an originationg node are contained in the list subscribed to by another node
 sub checkSubscribesAnySets {
     my ($originSets, $subscriberSets) = @_;
     my $before;
@@ -1846,6 +1880,7 @@ sub checkSubscribesAnySets {
     return ($before != $after);        # return false if no keys were removed from the hash
 }
 
+# Read configuration details from a configuration file
 sub getConfig {
     my $cfgfile = shift;
     my @fields;
@@ -1980,6 +2015,7 @@ sub getConfig {
     return $success;
 }
 
+# Interpret a textual representation of a boolean value 
 sub checkBoolean {
     my $text = shift;
     my $value = undef;
@@ -1992,6 +2028,7 @@ sub checkBoolean {
     return $value;
 }
 
+# Check if a text value is a valid integer
 sub checkInteger {
     my $integer = shift;
     my $value = undef;
@@ -2002,7 +2039,7 @@ sub checkInteger {
     return $value;
 }
 
-
+# Run a slonik command and capture all output via autoflushing channel
 sub runSlonik {
     my $script = shift;
     my $prefix = shift;
@@ -2027,6 +2064,7 @@ sub runSlonik {
     return $success;
 }
 
+# Experimental logic to watch the cluster status and perform an automatic failover
 sub autoFailover {
     my $dbconninfo = shift;
     my $clname = shift;
@@ -2134,13 +2172,13 @@ sub autoFailover {
                             printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_detail', $failed, $g_backups{$failed}));
                         }
                         $g_script = writeFailover($prefix, $dbconninfo, $clname, $dbuser, $dbpass, undef, undef, $g_subs_follow_origin, $g_use_comment_aliases, $logfile, $log_prefix);   
-                        unless (runSlonik($g_script, $prefix, $logfile, $log_prefix)) {
-                            printlogln($prefix,$logfile,$log_prefix,lookupMsg('err_execute_fail', 'slonik script', $g_script));
-                        }
+                        #unless (runSlonik($g_script, $prefix, $logfile, $log_prefix)) {
+                        #    printlogln($prefix,$logfile,$log_prefix,lookupMsg('err_execute_fail', 'slonik script', $g_script));
+                        #}
                         $cluster_loaded = false;
 
-                        #print "SCRIPT: $g_script\n";
-                        #exit(0);
+                        print "SCRIPT: $g_script\n";
+                        exit(0);
                     }
                     else {
                         printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_halt', $failed));
@@ -2156,6 +2194,7 @@ sub autoFailover {
     }
 }
 
+# Count of failed and live nodes to perform very basic split-brain check
 sub checkSplit {
     my $prefix = shift;
     my $logfile = shift;
@@ -2181,7 +2220,7 @@ sub checkSplit {
 }
 
 # Check each nodes perspective of the failure to try to ensure the issue isn't that this script just can't connect to the origin/provider
-# The idea here is just to wait for a short period of time and see if the lag time for the nodes has increased by the same amount.
+# The idea here is just to wait for a short period of time and see if the lag time for the nodes has increased by the same amount
 sub checkPerspective {
     my $clname = shift;
     my $dbuser = shift;
@@ -2315,6 +2354,7 @@ sub checkPerspective {
     return $agreed;
 }
 
+# Check if any nodes have failed by connecting and probing the Slony schema
 sub checkFailed {
     my $clname = shift;
     my $dbuser = shift;
@@ -2407,6 +2447,7 @@ sub checkFailed {
     }
 }
 
+# Attempt to try and find the most suitable backup node for a failed node
 sub findBackup {
     my $clname = shift;
     my $dbuser = shift;
