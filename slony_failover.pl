@@ -37,7 +37,7 @@ use constant false => 0;
 use constant true  => 1;
 
 my $g_script_version = '1.0.3';
-my $g_debug = true;
+my $g_debug = false;
 my $g_pidfile = '/var/run/slony_failover.pid';
 my $g_pid_written = false;
 my $g_lang = 'en';
@@ -2172,13 +2172,13 @@ sub autoFailover {
                             printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_detail', $failed, $g_backups{$failed}));
                         }
                         $g_script = writeFailover($prefix, $dbconninfo, $clname, $dbuser, $dbpass, undef, undef, $g_subs_follow_origin, $g_use_comment_aliases, $logfile, $log_prefix);   
-                        #unless (runSlonik($g_script, $prefix, $logfile, $log_prefix)) {
-                        #    printlogln($prefix,$logfile,$log_prefix,lookupMsg('err_execute_fail', 'slonik script', $g_script));
-                        #}
+                        unless (runSlonik($g_script, $prefix, $logfile, $log_prefix)) {
+                            printlogln($prefix,$logfile,$log_prefix,lookupMsg('err_execute_fail', 'slonik script', $g_script));
+                        }
                         $cluster_loaded = false;
 
-                        print "SCRIPT: $g_script\n";
-                        exit(0);
+                        #print "SCRIPT: $g_script\n";
+                        #exit(0);
                     }
                     else {
                         printlogln($prefix,$logfile,$log_prefix,lookupMsg('autofailover_halt', $failed));
