@@ -23,6 +23,7 @@
 
 use strict;
 use warnings;
+use experimental 'smartmatch';
 use DBI;
 use Getopt::Long qw/GetOptions/;
 use Data::UUID;
